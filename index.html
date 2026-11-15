@@ -10,7 +10,8 @@
   canvas { image-rendering: pixelated; image-rendering: crisp-edges; display: block; touch-action: none; cursor: grab; background: #07060d; }
   canvas:active { cursor: grabbing; }
   #msg { position: fixed; left: 0; right: 0; bottom: 18%; text-align: center; letter-spacing: 0.04em; color: #9fd8c0; padding: 0 16px; }
-  #ui { position: fixed; left: 0; right: 0; bottom: 14px; display: none; gap: 8px; justify-content: center; flex-wrap: wrap; padding: 0 12px; }
+  body.full { align-items: flex-start; justify-content: flex-start; }
+  #ui { position: fixed; z-index: 5; left: 0; right: 0; bottom: 14px; display: none; gap: 8px; justify-content: center; flex-wrap: wrap; padding: 0 12px; }
   button { font: inherit; color: #d8f2e2; background: rgba(12, 14, 30, 0.72); border: 1px solid rgba(160, 220, 200, 0.35); padding: 7px 12px; border-radius: 2px; cursor: pointer; }
   button:hover:not(:disabled) { background: rgba(30, 44, 60, 0.85); border-color: rgba(190, 240, 215, 0.7); }
   button:focus-visible { outline: 2px solid #f0e6a0; outline-offset: 2px; }
@@ -20,7 +21,7 @@
 <body>
 <canvas id="cv" width="480" height="270" aria-label="Pixel-art 3D scene: a horned, red-haired woman walks through a glowing forest"></canvas>
 <div id="msg">waking the forest…</div>
-<div id="ui"><button id="bplay">Pause</button><button id="bcam" disabled>Drag to orbit</button><button id="bpix">Pixel filter: on</button></div>
+<div id="ui"><button id="bplay">Pause</button><button id="bcam" disabled>Drag to orbit</button><button id="bpix">Pixel filter: on</button><button id="bfull">Fullscreen</button></div>
 <script>
 'use strict';
 // ============================================================ math
@@ -1057,6 +1058,13 @@ function createRenderer(canvas, W, H) {
       gl.activeTexture(which === 'pos' ? gl.TEXTURE0 : which === 'u' ? gl.TEXTURE1 : gl.TEXTURE2);
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, r0, TW, rows, gl.RGBA, gl.FLOAT, arr.subarray(r0 * TW * 4, D.TH * TW * 4));
     },
+    // change the low-res render size (used when the page fills the window)
+    resize(w, h) {
+      if (w === W && h === H) return;
+      W = w; H = h; R.W = w; R.H = h; canvas.width = w; canvas.height = h;
+      gl.activeTexture(gl.TEXTURE4); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.activeTexture(gl.TEXTURE5); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    },
     setPalette(pal) {
       const n = Math.min(72, pal.length), lab = new Float32Array(72 * 3), rgb = new Float32Array(72 * 3);
       for (let i = 0; i < n; i++) { const c = pal[i], l = srgbToOklab(c[0], c[1], c[2]); l[0] *= 1.15; lab.set(l, i * 3); rgb.set(c, i * 3); }
@@ -1609,13 +1617,23 @@ async function boot() {
 // ============================================================ page: playback, orbit, capture hook
 (function () {
   const cv = document.getElementById('cv'), ui = document.getElementById('ui'), msg = document.getElementById('msg');
+  // normal: 480x270 at a whole-number scale. full: the low-res size follows the window so it fills it edge to edge.
   function fit() {
-    const dpr = window.devicePixelRatio || 1; let s = Math.min(window.innerWidth / LW, window.innerHeight / LH);
+    const dpr = window.devicePixelRatio || 1, ww = window.innerWidth, wh = window.innerHeight;
+    if (ST.full && REN) {
+      const k = Math.max(1, Math.round(Math.sqrt(ww * dpr * wh * dpr / (LW * LH))));
+      const w = Math.max(64, Math.ceil(ww * dpr / k)), h = Math.max(64, Math.ceil(wh * dpr / k));
+      REN.resize(w, h); cv.style.width = (w * k / dpr) + 'px'; cv.style.height = (h * k / dpr) + 'px';
+      document.body.classList.add('full'); return;
+    }
+    document.body.classList.remove('full');
+    if (REN) REN.resize(LW, LH);
+    let s = Math.min(ww / LW, wh / LH);
     if (s * dpr >= 1) s = Math.floor(s * dpr) / dpr;
     cv.style.width = (LW * s) + 'px'; cv.style.height = (LH * s) + 'px';
   }
+  const ST = { t: 0, playing: true, orbit: false, yaw: 0, pitch: 0.12, dist: 5, last: 0, full: false };
   window.addEventListener('resize', fit); fit();
-  const ST = { t: 0, playing: true, orbit: false, yaw: 0, pitch: 0.12, dist: 5, last: 0 };
   function orbitCam(t) {
     const h = herAt(t), cp = Math.cos(ST.pitch);
     const tgt = [h[0], h[1] + 1.05, h[2]];
@@ -1634,6 +1652,7 @@ async function boot() {
     document.getElementById('bcam').textContent = ST.orbit ? 'Back to film camera' : 'Drag to orbit';
     document.getElementById('bcam').disabled = !ST.orbit;
     document.getElementById('bpix').textContent = REN.quant ? 'Pixel filter: on' : 'Pixel filter: off';
+    document.getElementById('bfull').textContent = ST.full ? 'Exit fullscreen' : 'Fullscreen';
   }
   function loop(now) {
     const dt = Math.min(0.05, (now - ST.last) / 1000); ST.last = now;
@@ -1675,7 +1694,25 @@ async function boot() {
     document.getElementById('bplay').onclick = () => { ST.playing = !ST.playing; sync(); };
     document.getElementById('bcam').onclick = () => { ST.orbit = false; sync(); };
     document.getElementById('bpix').onclick = () => { REN.quant = !REN.quant; sync(); };
-    window.addEventListener('keydown', (e) => { if (e.code === 'Space') { e.preventDefault(); ST.playing = !ST.playing; sync(); } });
+    // fullscreen: ask the browser for the real thing; if it refuses, still fill the whole window
+    const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement;
+    function setFull(on) {
+      ST.full = on; fit(); sync();
+      const el = document.documentElement;
+      try {
+        if (on && !fsEl()) { const rq = el.requestFullscreen || el.webkitRequestFullscreen; if (rq) { const pr = rq.call(el); if (pr && pr.catch) pr.catch(() => {}); } }
+        else if (!on && fsEl()) { const ex = document.exitFullscreen || document.webkitExitFullscreen; if (ex) { const pr = ex.call(document); if (pr && pr.catch) pr.catch(() => {}); } }
+      } catch (e) { /* refused: the window-filling layout is already on */ }
+    }
+    let wasFs = false;
+    const onFs = () => { const now = !!fsEl(); if (wasFs && !now && ST.full) { ST.full = false; sync(); } wasFs = now; fit(); };
+    document.addEventListener('fullscreenchange', onFs); document.addEventListener('webkitfullscreenchange', onFs);
+    document.getElementById('bfull').onclick = () => setFull(!ST.full);
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Space') { e.preventDefault(); ST.playing = !ST.playing; sync(); }
+      else if (e.code === 'KeyF') setFull(!ST.full);
+      else if (e.code === 'Escape' && ST.full && !fsEl()) setFull(false);
+    });
     ST.last = performance.now(); requestAnimationFrame(loop);
   }).catch((e) => { if (msg) { msg.style.display = 'block'; msg.textContent = 'Could not start: ' + e.message; } console.error(e); });
 })();
